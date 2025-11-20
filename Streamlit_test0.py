@@ -1,13 +1,12 @@
-import streamlit as st
-from datetime import datetime, date
-import os, csv, platform
+from datetime import datetime, date, timedelta
+import os, platform, calendar
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import streamlit as st
 
-st.title("主頁面：Streamlit_test0")
-st.write("這是首頁內容。左邊 sidebar 會出現其他 pages。")
-
+# === 輸出圖檔解析度設定（DPI）===
+IMAGE_DPI = 300   # 想更清楚就改 300, 400
 
 # === 路徑設定 ===
 BASE_DIR = r"C:\Lance\Study\PythonLearning"
@@ -18,219 +17,457 @@ PHOTO_DIR = os.path.join(BASE_DIR, "Results", "Photos")
 os.makedirs(CSV_DIR, exist_ok=True)
 os.makedirs(PHOTO_DIR, exist_ok=True)
 
-# 📌 任務與檔案
+# 📌 任務與檔案（每日）
 TASKS = ["Duolingo", "Python", "Reading", "Financial", "Inner Dialogue", "Mindful Rest"]
 CSV_FILE = os.path.join(CSV_DIR, "todoCHECK.csv")
 
-# 圖檔輸出解析度（DPI）→ 想更清楚可以調高，例如 300
-IMAGE_DPI = 300
+# 📌 一週目標任務與檔案（Weekly 數值欄位）
+WEEKLY_TASKS = [
+    "Workout_Chest",
+    "Workout_Back",
+    "Workout_Legs",
+    "Workout_Shoulders_Core",
+    "Learning_Drawing",
+    "Learning_Flowchart",
+    "Date_With_Myself",
+]
+SKILLS_FIELD = "Skills_Plus"  # 自由輸入文字（原本 Others）
 
-# ✅ 中文字型支援 + 圖表字體大小設定
+WEEKLY_TASK_LABELS = {
+    "Workout_Chest": "Workout – Chest",
+    "Workout_Back": "Workout – Back",
+    "Workout_Legs": "Workout – Legs",
+    "Workout_Shoulders_Core": "Workout – Shoulders + Core",
+    "Learning_Drawing": "Learning – Drawing",
+    "Learning_Flowchart": "Learning – Flowchart",
+    "Date_With_Myself": "Date With Myself",
+}
+WEEKLY_CSV_FILE = os.path.join(CSV_DIR, "weeklyGoals.csv")
+
+# ✅ 中文字型 & 預設字型大小
 if platform.system() == "Windows":
     plt.rcParams["font.family"] = "Microsoft JhengHei"
 elif platform.system() == "Darwin":
     plt.rcParams["font.family"] = "AppleGothic"
 else:
     plt.rcParams["font.family"] = "Noto Sans CJK JP"
-
 plt.rcParams["axes.unicode_minus"] = False
-plt.rcParams["axes.labelsize"] = 14      # x/y label
-plt.rcParams["xtick.labelsize"] = 14     # x 軸刻度字
-plt.rcParams["ytick.labelsize"] = 14     # y 軸刻度字
+plt.rcParams["font.size"] = 12  # 預設字型大小（備用）
 
 
-# ✅ 輸出圖表：自動存檔，若同名檔存在則自動加上時間戳記避免覆蓋
-def save_chart(fig, title: str, filename: str, dpi: int = IMAGE_DPI):
-    """
-    fig      ：matplotlib Figure
-    title    ：圖表標題（顯示在圖上）
-    filename：儲存的檔名（只要檔名，不含路徑）
-    特色：
-      - 不再詢問是否覆蓋
-      - 若同名檔案已存在，自動在檔名後加上 _HHMMSS 重新命名
-      - 標題字體：18pt、加粗
-      - 可指定 DPI（解析度）
-    """
+# ✅ 儲存並顯示圖表：存到 PHOTO_DIR，自動檔名與標題一致
+def save_and_show_chart(fig, title: str, overwrite_images: bool = True):
+    filename = title.replace(" ", "_") + ".png"
     filepath = os.path.join(PHOTO_DIR, filename)
 
-    if os.path.exists(filepath):
-        base, ext = os.path.splitext(filename)
-        timestamp = datetime.now().strftime("%H%M%S")
-        filename = f"{base}_{timestamp}{ext}"
-        filepath = os.path.join(PHOTO_DIR, filename)
-        st.warning(f"⚠️ 圖檔已存在，自動改名儲存為：{filename}")
+    # 檔案覆蓋邏輯
+    if os.path.exists(filepath) and not overwrite_images:
+        st.warning(f"圖檔已存在，未覆蓋：{filepath}")
+    else:
+        fig.tight_layout()
+        fig.savefig(filepath, dpi=IMAGE_DPI)
+        st.info(f"已儲存圖檔：{filepath}")
 
-    # 在圖上加上標題（suptitle 比較不會壓到軸標）
-    fig.suptitle(title, fontsize=18, fontweight="bold")
-    # rect 留一點空間給 suptitle
-    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-    fig.savefig(filepath, dpi=dpi, bbox_inches="tight")
-    st.info(f"📈 圖片已自動儲存：{filepath}")
-    return filepath
+    st.pyplot(fig)
+    plt.close(fig)
 
 
-# 📝 寫入每日任務（取代原本 daily_checklist 的 input/print）
-def save_daily_record(target_date: date, results, overwrite_existing: bool) -> bool:
-    """
-    target_date       : datetime.date（st.date_input 選到的日期）
-    results           : 對應 TASKS 的 0/1 list
-    overwrite_existing: 若該日期已存在紀錄，是否覆蓋
-    回傳 True 表示有成功寫入
-    """
-    today_str = target_date.isoformat()
+# 🔁 取得某日期所在週的「週一」日期
+def get_week_start(date_str: str) -> date:
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    # weekday(): Monday=0, Sunday=6
+    return d - timedelta(days=d.weekday())
 
-    # 檢查是否已存在同一天紀錄
-    if os.path.exists(CSV_FILE):
+
+# 📝 每日紀錄 UI
+def daily_checklist_ui():
+    st.subheader("📅 Daily Checklist")
+
+    # 選擇日期
+    selected_date = st.date_input("紀錄日期（Date）", value=date.today(), format="YYYY-MM-DD")
+    date_str = selected_date.isoformat()
+
+    # 載入現有每日資料
+    if os.path.exists(CSV_FILE) and os.stat(CSV_FILE).st_size > 0:
         df = pd.read_csv(CSV_FILE, encoding="utf-8")
-        if "日期" in df.columns and today_str in df["日期"].values:
-            if not overwrite_existing:
-                st.warning(f"🚫 {today_str} 已存在紀錄，且未勾選『覆蓋當天紀錄』，不寫入。")
-                return False
+    else:
+        df = pd.DataFrame(columns=["日期"] + TASKS)
 
-            # 覆蓋：刪除舊紀錄後再寫新紀錄
-            df = df[df["日期"] != today_str]
-            df.to_csv(CSV_FILE, index=False, encoding="utf-8")
-            st.info("🗑️ 舊資料已刪除。")
+    existing_row = df[df["日期"] == date_str] if "日期" in df.columns else pd.DataFrame()
 
-    # 寫入 CSV（append 模式）
-    file_exists = os.path.exists(CSV_FILE) and os.stat(CSV_FILE).st_size > 0
-    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["日期"] + TASKS)
-        writer.writerow([today_str] + results)
+    if not existing_row.empty:
+        st.info("此日期已有紀錄，下面顯示的是可編輯版本，按下「儲存每日紀錄」後會覆蓋該日資料。")
+        defaults = {task: int(existing_row[task].iloc[0]) == 1 for task in TASKS}
+    else:
+        defaults = {task: False for task in TASKS}
 
-    st.success(f"✅ 資料已寫入：{CSV_FILE}")
-    return True
+    st.write("請勾選今天完成的任務：")
+    task_results = {}
+    cols = st.columns(3)
+    for i, task in enumerate(TASKS):
+        with cols[i % 3]:
+            task_results[task] = st.checkbox(task, value=defaults[task])
+
+    if st.button("💾 儲存每日紀錄"):
+        # 轉成 0/1
+        row_values = [1 if task_results[task] else 0 for task in TASKS]
+
+        # 移除舊同日資料，再加入新紀錄
+        if not df.empty and "日期" in df.columns:
+            df = df[df["日期"] != date_str]
+
+        new_row = pd.DataFrame([[date_str] + row_values], columns=["日期"] + TASKS)
+        df = pd.concat([df, new_row], ignore_index=True)
+
+        df.to_csv(CSV_FILE, index=False, encoding="utf-8")
+        st.success(f"已寫入每日資料：{CSV_FILE}")
 
 
-# 📊 分析與圖表（Streamlit 版本）
-def analyze_data_streamlit():
+# 📊 每日分析與圖表
+def analyze_daily_data_ui(overwrite_images: bool):
+    st.subheader("📊 Daily Analysis")
+
     if not os.path.exists(CSV_FILE):
-        st.error(f"❌ 找不到資料檔：{CSV_FILE}，請先至少寫入一筆每日紀錄。")
+        st.error(f"找不到每日資料檔：{CSV_FILE}，請先建立紀錄。")
         return
 
     df = pd.read_csv(CSV_FILE, encoding="utf-8")
 
     if "日期" not in df.columns:
-        st.error("❌ CSV 缺少『日期』欄位，請確認檔案格式。")
+        st.error("CSV 缺少『日期』欄位，請確認檔案格式。")
         return
 
-    if len(df) == 0:
-        st.warning("⚠️ 沒有任何紀錄，無法分析。")
-        return
+    # 確保以日期排序（如果你有需要）
+    df = df.sort_values("日期").reset_index(drop=True)
 
-    # 每日完成總數
     df["Total Completed"] = df.iloc[:, 1:].sum(axis=1)
 
-    st.subheader("📑 目前資料表")
-    st.dataframe(df, use_container_width=True)
+    st.write("原始每日資料：")
+    st.dataframe(df)
 
-    # 取得今天日期字串，用來做圖檔檔名
-    today_str = date.today().isoformat()
+    # 折線圖：每日完成數
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(df["日期"], df["Total Completed"], marker="o")
+    ax.set_xticklabels(df["日期"], rotation=45, fontsize=14)
+    ax.set_ylabel("Total Tasks Completed", fontsize=14)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.set_title("Daily Total Tasks Completed", fontsize=18, fontweight="bold")
+    save_and_show_chart(fig, "Daily Total Tasks Completed", overwrite_images)
 
-    # === 折線圖：每日完成數 ===
-    st.subheader("📈 每日完成總數（折線圖）")
-
-    fig_line, ax_line = plt.subplots(figsize=(10, 5))
-    ax_line.plot(df["日期"], df["Total Completed"], marker="o")
-
-    # x 軸字旋轉＋字體大小
-    ax_line.tick_params(axis="x", labelrotation=45)
-    ax_line.set_ylabel("Total Tasks Completed")
-
-    line_title = "Daily Task Line"
-    line_filename = f"{line_title}_{today_str}.png".replace(" ", "_")
-    save_chart(fig_line, line_title, line_filename)
-    st.pyplot(fig_line)
-
-    # === 雷達圖：各任務完成率(%) ===
-    st.subheader("📊 各任務完成率 (Completion %) — 雷達圖")
-
+    # 雷達圖：各任務完成率（百分比）
     task_cols = df.columns[1:-1]  # 除去「日期」與最後一欄 Total Completed
     total_days = len(df)
-
-    if len(task_cols) == 0:
-        st.warning("⚠️ 沒有任務欄位，無法畫雷達圖。")
+    if total_days == 0:
+        st.warning("沒有每日紀錄資料，略過雷達圖。")
         return
 
-    # 完成率(%) = 任務完成次數 / 紀錄天數 × 100
     completion_rates = (df[task_cols].sum() / total_days * 100).tolist()
 
-    # 角度：為每個任務分配一個角度
-    angles = np.linspace(0, 2 * np.pi, len(task_cols), endpoint=False)
-    # 關閉雷達圖的線條：頭尾再接回第一個點
-    angles_closed = np.concatenate([angles, [angles[0]]])
-    rates_closed = np.concatenate([np.array(completion_rates), [completion_rates[0]]])
+    angles = np.linspace(0, 2 * np.pi, len(task_cols), endpoint=False).tolist()
+    completion_rates += [completion_rates[0]]
+    angles += [angles[0]]
 
-    fig_radar, ax = plt.subplots(figsize=(6, 6), subplot_kw={"polar": True})
-    ax.plot(angles_closed, rates_closed, "o-", linewidth=2)
-    ax.fill(angles_closed, rates_closed, alpha=0.25)
+    fig = plt.figure(figsize=(6, 6))
+    ax = fig.add_subplot(111, polar=True)
+    ax.plot(angles, completion_rates, "o-", linewidth=2)
+    ax.fill(angles, completion_rates, alpha=0.25)
 
-    # θ 軸標籤：任務名稱 + 字體 14
-    ax.set_xticks(angles)
+    ax.set_xticks(angles[:-1])
     ax.set_xticklabels(task_cols, fontsize=14)
 
-    # r 軸：0～100%，刻度 0, 20, 40, 60, 80, 100
     ax.set_ylim(0, 100)
     ax.set_yticks([0, 20, 40, 60, 80, 100])
-    ax.set_yticklabels(["0%", "20%", "40%", "60%", "80%", "100%"], fontsize=14)
+    ax.set_yticklabels(["0%", "20%", "40%", "60%", "80%", "100%"])
+    ax.tick_params(axis="y", labelsize=14)
 
-    radar_title = "Daily Task Radar (Completion %)"
-    radar_filename = f"Daily_Task_Radar_{today_str}.png".replace(" ", "_")
-    save_chart(fig_radar, radar_title, radar_filename)
-    st.pyplot(fig_radar)
+    ax.set_title("Task Completion Rate (%)", fontsize=18, fontweight="bold")
+    save_and_show_chart(fig, "Task Completion Rate (%)", overwrite_images)
 
 
-# 🚀 Streamlit 主介面
-def main():
-    st.title("📅 每日任務追蹤 & 完成率分析（Streamlit 版）")
+# 📝 Weekly 目標紀錄 UI
+def weekly_goal_checklist_ui():
+    st.subheader("📆 Weekly Goals")
 
-    st.markdown(
-        """
-這個小工具會幫你做三件事：
+    # 以某一天來代表本週（Mon–Sun）
+    ref_date = st.date_input(
+        "本次一週目標紀錄日期（會自動找到該週的週一 ~ 週日）",
+        value=date.today(),
+        format="YYYY-MM-DD",
+        key="weekly_ref_date",
+    )
+    today_str = ref_date.isoformat()
 
-1. 在網頁上勾選每日任務完成狀況  
-2. 把結果寫入 `todoCHECK.csv`  
-3. 產生「每日完成數折線圖」＋「完成率(%) 雷達圖」，存在 `Results/Photos`，並在頁面顯示  
-"""
+    try:
+        datetime.strptime(today_str, "%Y-%m-%d")
+    except ValueError:
+        st.error("日期格式錯誤，請用 YYYY-MM-DD")
+        return
+
+    week_start = get_week_start(today_str)
+    week_end = week_start + timedelta(days=6)
+    week_label = f"{week_start.isoformat()} ~ {week_end.isoformat()}"
+    st.info(f"Weekly Goals for {week_label} (Mon–Sun)")
+
+    # 讀取或建立 weekly CSV
+    if os.path.exists(WEEKLY_CSV_FILE) and os.stat(WEEKLY_CSV_FILE).st_size > 0:
+        df_w = pd.read_csv(WEEKLY_CSV_FILE, encoding="utf-8")
+    else:
+        df_w = pd.DataFrame(columns=["Week_Start"] + WEEKLY_TASKS + [SKILLS_FIELD])
+
+    if "Week_Start" not in df_w.columns:
+        st.error("Weekly CSV 缺少 'Week_Start' 欄位，請確認檔案格式。")
+        return
+    if SKILLS_FIELD not in df_w.columns:
+        df_w[SKILLS_FIELD] = ""
+
+    week_str = week_start.isoformat()
+    df_w["Week_Start"] = df_w["Week_Start"].astype(str)
+
+    # 找出本週 row；若不存在則新增並初始化 0
+    if week_str in df_w["Week_Start"].values:
+        row_index = df_w.index[df_w["Week_Start"] == week_str][0]
+        st.info("已存在本週紀錄，此次輸入為『本次增加/減少』，儲存後會在原有基礎上加總。")
+    else:
+        row_index = len(df_w)
+        df_w.loc[row_index, "Week_Start"] = week_str
+        for col in WEEKLY_TASKS:
+            df_w.loc[row_index, col] = 0
+        df_w.loc[row_index, SKILLS_FIELD] = ""
+        st.success("建立新的本週紀錄（所有數值欄位初始為 0）。")
+
+    # 顯示目前本週已有數值
+    st.write("目前本週累計值：")
+    current_vals = {}
+    for col in WEEKLY_TASKS:
+        current_vals[col] = int(pd.to_numeric(df_w.at[row_index, col], errors="coerce") or 0)
+    st.table(
+        pd.DataFrame(
+            {
+                "Task": [WEEKLY_TASK_LABELS.get(c, c) for c in WEEKLY_TASKS],
+                "Current Total": [current_vals[c] for c in WEEKLY_TASKS],
+            }
+        )
     )
 
-    st.markdown("---")
+    st.write("請輸入『本次要增加／減少』的次數（可輸入負數）：")
+    deltas = {}
+    cols_num = st.columns(2)
+    for i, task in enumerate(WEEKLY_TASKS):
+        label = WEEKLY_TASK_LABELS.get(task, task)
+        with cols_num[i % 2]:
+            deltas[task] = st.number_input(
+                f"{label} Δ", value=0, step=1, format="%d", key=f"delta_{task}"
+            )
 
-    # 左邊：填寫今日紀錄；右邊：只看統計
-    col_left, col_right = st.columns([2, 1])
+    # Skills Plus：自由輸入文字，追加在本週清單
+    old_skills = str(df_w.at[row_index, SKILLS_FIELD]) if pd.notna(df_w.at[row_index, SKILLS_FIELD]) else ""
+    new_skills = st.text_input(
+        "Skills Plus 本週新技能（自由輸入文字，逗號或分號分隔，留白＝略過）：",
+        value="",
+        key="skills_plus_input",
+    )
 
-    with col_left:
-        st.subheader("📝 填寫 / 更新每日紀錄")
+    if st.button("💾 儲存 Weekly 更新"):
+        # 重新載入一次 df（保守作法）
+        if os.path.exists(WEEKLY_CSV_FILE) and os.stat(WEEKLY_CSV_FILE).st_size > 0:
+            df_w = pd.read_csv(WEEKLY_CSV_FILE, encoding="utf-8")
+        else:
+            df_w = pd.DataFrame(columns=["Week_Start"] + WEEKLY_TASKS + [SKILLS_FIELD])
 
-        selected_date = st.date_input("紀錄日期", value=date.today())
+        if "Week_Start" not in df_w.columns:
+            df_w["Week_Start"] = ""
 
-        st.write("請勾選今天完成的任務：")
-        task_results = []
-        for i, task in enumerate(TASKS):
-            done = st.checkbox(task, key=f"task_{i}")
-            task_results.append(1 if done else 0)
+        if SKILLS_FIELD not in df_w.columns:
+            df_w[SKILLS_FIELD] = ""
 
-        overwrite_existing = st.checkbox(
-            "若該日期已有紀錄，覆蓋當天紀錄",
-            value=True,
-            help="勾選時：同一天只保留最新一次的勾選結果。",
-        )
+        df_w["Week_Start"] = df_w["Week_Start"].astype(str)
 
-        if st.button("💾 儲存紀錄並產生圖表"):
-            ok = save_daily_record(selected_date, task_results, overwrite_existing)
-            if ok:
-                analyze_data_streamlit()
+        if week_str in df_w["Week_Start"].values:
+            row_index = df_w.index[df_w["Week_Start"] == week_str][0]
+        else:
+            row_index = len(df_w)
+            df_w.loc[row_index, "Week_Start"] = week_str
+            for col in WEEKLY_TASKS:
+                df_w.loc[row_index, col] = 0
+            df_w.loc[row_index, SKILLS_FIELD] = ""
 
-    with col_right:
-        st.subheader("🔍 僅重新產生圖表（不寫入新資料）")
-        st.caption("當 CSV 已存在，只想更新圖表時可以用。")
-        if st.button("📊 重新分析現有資料"):
-            analyze_data_streamlit()
+        # 加總數值欄位
+        for task in WEEKLY_TASKS:
+            current_val = pd.to_numeric(df_w.at[row_index, task], errors="coerce")
+            if np.isnan(current_val):
+                current_val = 0
+            df_w.at[row_index, task] = int(current_val) + int(deltas[task])
+
+        # Skills Plus 文字追加
+        if new_skills.strip():
+            if old_skills.strip():
+                df_w.at[row_index, SKILLS_FIELD] = old_skills + "; " + new_skills.strip()
+            else:
+                df_w.at[row_index, SKILLS_FIELD] = new_skills.strip()
+
+        # 排序後寫回
+        df_w = df_w.sort_values("Week_Start")
+        df_w.to_csv(WEEKLY_CSV_FILE, index=False, encoding="utf-8")
+        st.success(f"Weekly 資料已寫入：{WEEKLY_CSV_FILE}")
+
+
+# 📊 Weekly 分析與圖表
+def analyze_weekly_data_ui(overwrite_images: bool):
+    st.subheader("📊 Weekly Analysis")
+
+    if not os.path.exists(WEEKLY_CSV_FILE):
+        st.warning(f"找不到 weekly 資料檔：{WEEKLY_CSV_FILE}，略過 weekly 分析。")
+        return
+
+    df_w = pd.read_csv(WEEKLY_CSV_FILE, encoding="utf-8")
+    if "Week_Start" not in df_w.columns:
+        st.error("Weekly CSV 缺少 'Week_Start' 欄位，請確認檔案格式。")
+        return
+    if df_w.empty:
+        st.warning("Weekly 資料為空，略過 weekly 分析。")
+        return
+
+    if SKILLS_FIELD not in df_w.columns:
+        df_w[SKILLS_FIELD] = ""
+
+    # 確保所有 weekly 數值欄位為數值
+    for col in WEEKLY_TASKS:
+        if col in df_w.columns:
+            df_w[col] = pd.to_numeric(df_w[col], errors="coerce").fillna(0)
+        else:
+            df_w[col] = 0
+
+    # 依週一日期排序
+    df_w["Week_Start"] = pd.to_datetime(df_w["Week_Start"])
+    df_w = df_w.sort_values("Week_Start").reset_index(drop=True)
+
+    # 產生 Week_Label：MonthAbbr.N（同月份內按週數編號）
+    years = df_w["Week_Start"].dt.year.to_list()
+    months = df_w["Week_Start"].dt.month.to_list()
+
+    week_index_in_month: list[int] = []
+    last_ym = None
+    counter = 0
+    for y, m in zip(years, months):
+        ym = (int(y), int(m))
+        if ym != last_ym:
+            last_ym = ym
+            counter = 1
+        else:
+            counter += 1
+        week_index_in_month.append(counter)
+
+    df_w["Week_Index_In_Month"] = week_index_in_month
+
+    labels: list[str] = []
+    for m, idx in zip(months, week_index_in_month):
+        abbr = calendar.month_abbr[int(m)]  # e.g. 'Nov'
+        labels.append(f"{abbr}.{int(idx)}")
+    df_w["Week_Label"] = labels
+
+    st.write("Weekly 資料：")
+    st.dataframe(df_w)
+
+    x = np.arange(len(df_w))
+    week_labels = df_w["Week_Label"].tolist()
+
+    # 1) Workout 圖：四條線 + 數字標註
+    workout_cols = ["Workout_Chest", "Workout_Back", "Workout_Legs", "Workout_Shoulders_Core"]
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for col in workout_cols:
+        y = df_w[col].to_numpy()
+        ax.plot(x, y, marker="o", label=WEEKLY_TASK_LABELS.get(col, col))
+        for i, val in enumerate(y):
+            ax.text(float(i), float(val), str(int(val)), ha="center", va="bottom", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(week_labels, rotation=45, fontsize=14)
+    ax.set_ylabel("Count per Week", fontsize=14)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.legend(loc="best")
+    ax.set_title("Weekly Workout", fontsize=18, fontweight="bold")
+    save_and_show_chart(fig, "Weekly Workout", overwrite_images)
+
+    # 2) Learning 圖：兩條線 + 數字標註
+    learning_cols = ["Learning_Drawing", "Learning_Flowchart"]
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for col in learning_cols:
+        y = df_w[col].to_numpy()
+        ax.plot(x, y, marker="o", label=WEEKLY_TASK_LABELS.get(col, col))
+        for i, val in enumerate(y):
+            ax.text(float(i), float(val), str(int(val)), ha="center", va="bottom", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(week_labels, rotation=45, fontsize=14)
+    ax.set_ylabel("Count per Week", fontsize=14)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.legend(loc="best")
+    ax.set_title("Weekly Learning", fontsize=18, fontweight="bold")
+    save_and_show_chart(fig, "Weekly Learning", overwrite_images)
+
+    # 3) Date With Myself 圖：單條線 + 數字標註
+    col = "Date_With_Myself"
+    fig, ax = plt.subplots(figsize=(10, 6))
+    y = df_w[col].to_numpy()
+    ax.plot(x, y, marker="o", label=WEEKLY_TASK_LABELS.get(col, col))
+    for i, val in enumerate(y):
+        ax.text(float(i), float(val), str(int(val)), ha="center", va="bottom", fontsize=12)
+    ax.set_xticks(x)
+    ax.set_xticklabels(week_labels, rotation=45, fontsize=14)
+    ax.set_ylabel("Count per Week", fontsize=14)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.legend(loc="best")
+    ax.set_title("Weekly Date With Myself", fontsize=18, fontweight="bold")
+    save_and_show_chart(fig, "Weekly Date With Myself", overwrite_images)
+
+    # 4) Skills Plus 圖：每週新技能文字列表
+    lines: list[str] = []
+    for i in range(len(df_w)):
+        label = str(df_w.at[i, "Week_Label"])
+        skills = str(df_w.at[i, SKILLS_FIELD]) if pd.notna(df_w.at[i, SKILLS_FIELD]) else ""
+        skills = skills.strip() if skills else ""
+        if not skills:
+            skills = "-"
+        lines.append(f"{label}: {skills}")
+
+    text_content = "\n".join(lines)
+    fig = plt.figure(figsize=(10, max(4.0, 0.6 * len(lines) + 1.0)))
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+    ax.text(0.01, 0.99, text_content, va="top", ha="left", fontsize=14)
+    ax.set_title("Weekly Skills Plus List", fontsize=18, fontweight="bold", pad=20)
+    save_and_show_chart(fig, "Weekly Skills Plus List", overwrite_images)
+
+
+# 🚀 Streamlit 主入口
+def main():
+    st.title("📘 Daily & Weekly Habit Tracker")
+
+    # 側邊欄設定
+    st.sidebar.header("設定 / Settings")
+    overwrite_images = st.sidebar.checkbox(
+        "Overwrite existing image files when saving charts?",
+        value=True,
+    )
+    st.sidebar.write("CSV 目錄：")
+    st.sidebar.code(CSV_DIR)
+    st.sidebar.write("圖片輸出目錄：")
+    st.sidebar.code(PHOTO_DIR)
+
+    tab_daily, tab_weekly = st.tabs(["Daily", "Weekly"])
+
+    with tab_daily:
+        daily_checklist_ui()
+        st.markdown("---")
+        if st.button("📊 產生每日統計圖"):
+            analyze_daily_data_ui(overwrite_images)
+
+    with tab_weekly:
+        weekly_goal_checklist_ui()
+        st.markdown("---")
+        if st.button("📊 產生 Weekly 統計圖"):
+            analyze_weekly_data_ui(overwrite_images)
 
 
 if __name__ == "__main__":
     main()
+
 
