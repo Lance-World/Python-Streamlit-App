@@ -5,6 +5,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
+st.title("主頁面：Streamlit_test0")
+st.write("這是首頁內容。左邊 sidebar 會出現其他 pages。")
+
 
 # === 路徑設定 ===
 BASE_DIR = r"C:\Lance\Study\PythonLearning"
